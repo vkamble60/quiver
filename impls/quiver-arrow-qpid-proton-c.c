@@ -103,10 +103,10 @@ static inline bool bytes_equal(const pn_bytes_t a, const pn_bytes_t b) {
 }
 
 /* TODO aconway 2017-06-09: need windows portable version */
-pn_timestamp_t timestamp() {
+int64_t now() {
     struct timespec t;
     clock_gettime(CLOCK_REALTIME, &t);
-    return t.tv_sec*1000 + t.tv_nsec/1000000;
+    return t.tv_sec * 1000 + t.tv_nsec / (1000 * 1000);
 }
 
 static const size_t BUF_MIN = 1024;
@@ -168,15 +168,15 @@ static void print_message(pn_message_t *m) {
         FAIL("unexpected property name: %.*s", key.start, key.size);
     }
     ASSERT(pn_data_next(props));
-    ASSERT(pn_data_type(props) == PN_TIMESTAMP);
-    pn_timestamp_t ts = pn_data_get_timestamp(props);
-    pn_data_exit(props);
-    printf("%" PRIu64 ",%" PRId64 ",%" PRId64 "\n", id, ts, timestamp());
+    ASSERT(pn_data_type(props) == PN_LONG);
+    int64_t stime = pn_data_get_long(props);
+    ASSERT(pn_data_exit(props));
+    printf("%" PRIu64 ",%" PRId64 ",%" PRId64 "\n", id, stime, now());
 }
 
 static void send_message(struct arrow *a, pn_link_t *l) {
     ++a->sent;
-    pn_timestamp_t ts = timestamp();
+    int64_t stime = now();
     pn_atom_t id;
     id.type = PN_ULONG;
     id.u.as_ulong = (uint64_t)a->sent;
@@ -186,7 +186,7 @@ static void send_message(struct arrow *a, pn_link_t *l) {
     ASSERT(!pn_data_put_map(props));
     ASSERT(pn_data_enter(props));
     ASSERT(!pn_data_put_string(props, pn_bytes(SEND_TIME.size, SEND_TIME.start)));
-    ASSERT(!pn_data_put_timestamp(props, ts));
+    ASSERT(!pn_data_put_long(props, stime));
     ASSERT(pn_data_exit(props));
     size_t size = encode_message(a->message, &a->buffer);
     ASSERT(size > 0);
@@ -194,7 +194,7 @@ static void send_message(struct arrow *a, pn_link_t *l) {
     pn_delivery(l, pn_dtag((const char *)&a->sent, sizeof(a->sent)));
     ASSERT(size == pn_link_send(l, a->buffer.start, size));
     ASSERT(pn_link_advance(l));
-    printf("%zu,%" PRId64 "\n", a->sent, ts);
+    printf("%zu,%" PRId64 "\n", a->sent, stime);
 }
 
 static void fail_if_condition(pn_event_t *e, pn_condition_t *cond) {
@@ -281,10 +281,8 @@ static bool handle(struct arrow* a, pn_event_t* e) {
             if (a->accepted >= a->messages) {
                 stop(a);
             }
-            if (a->accepted % 10000 == 0) {
-                if (time(NULL) - a->start_time >= a->seconds) {
-                    stop(a);
-                }
+            if (a->accepted % 10000 == 0 && now() - a->start_time >= a->seconds * 1000) {
+                stop(a);
             }
         } else if (pn_link_is_receiver(l) && pn_delivery_readable(d) && !pn_delivery_partial(d)) {
             decode_message(a->message, d, &a->buffer);
@@ -295,10 +293,8 @@ static bool handle(struct arrow* a, pn_event_t* e) {
             if (a->received >= a->messages) {
                 stop(a);
             }
-            if (a->received % 10000 == 0) {
-                if (time(NULL) - a->start_time >= a->seconds) {
-                    stop(a);
-                }
+            if (a->received % 10000 == 0 && now() - a->start_time >= a->seconds * 1000) {
+                stop(a);
             }
             pn_link_flow(l, a->credit_window - pn_link_credit(l));
         }
@@ -420,7 +416,7 @@ int main(int argc, char** argv) {
         break;
     }
 
-    a.start_time = time(NULL);
+    a.start_time = now();
 
     run(&a);
 
